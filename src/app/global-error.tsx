@@ -1,0 +1,3 @@
+'use client';
+import { Button } from '@/components/ui/button';
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) { return <html><body><main className="flex min-h-screen items-center justify-center bg-background p-6"><div className="max-w-md rounded-2xl border bg-card p-8 text-center shadow-sm"><h1 className="font-display text-2xl font-medium">ระบบมีข้อผิดพลาด</h1><p className="mt-2 text-sm text-muted-foreground">Error boundary พร้อมแล้ว เหลือเสียบ Sentry DSN จริงเพื่อส่ง log เข้า dashboard</p>{error?.digest && <code className="mt-4 block rounded bg-secondary p-2 text-xs">{error.digest}</code>}<Button className="mt-6" onClick={reset}>ลองใหม่</Button></div></main></body></html>; }
