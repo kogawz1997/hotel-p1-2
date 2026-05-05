@@ -2,20 +2,46 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import Anthropic from '@anthropic-ai/sdk';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+type KnowledgeItem = {
+  question: string | null;
+  answer: string | null;
+};
+
+type ChatHistoryItem = {
+  role?: 'user' | 'assistant';
+  content?: string;
+};
+
+const anthropic = process.env.ANTHROPIC_API_KEY
+  ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  : null;
 
 export async function POST(request: NextRequest) {
   const { hotelId, message, history } = await request.json();
-  if (!hotelId || !message) return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
+
+  if (!hotelId || !message) {
+    return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
+  }
 
   const supabase = createAdminClient();
 
   const [{ data: hotel }, { data: knowledge }] = await Promise.all([
-    supabase.from('hotels').select('name, city, check_in_time, check_out_time, phone, email').eq('id', hotelId).single(),
-    supabase.from('knowledge_base').select('question, answer').eq('hotel_id', hotelId).eq('active', true).limit(30),
+    supabase
+      .from('hotels')
+      .select('name, city, check_in_time, check_out_time, phone, email')
+      .eq('id', hotelId)
+      .single(),
+    supabase
+      .from('knowledge_base')
+      .select('question, answer')
+      .eq('hotel_id', hotelId)
+      .eq('active', true)
+      .limit(30),
   ]);
 
-  const kb = (knowledge || []).map(k => `Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+  const kb = ((knowledge || []) as KnowledgeItem[])
+    .map((k: KnowledgeItem) => `Q: ${k.question || ''}\nA: ${k.answer || ''}`)
+    .join('\n\n');
 
   const systemPrompt = `คุณคือผู้ช่วยออนไลน์ของ ${hotel?.name || 'โรงแรม'} ตั้งอยู่ที่ ${hotel?.city || 'Thailand'}
 เวลา Check-in: ${hotel?.check_in_time || '14:00'} | Check-out: ${hotel?.check_out_time || '12:00'}
@@ -28,10 +54,28 @@ ${kb ? `ข้อมูลเพิ่มเติม:\n${kb}` : ''}
 - ถ้าไม่รู้คำตอบ แนะนำให้โทรหาโรงแรมโดยตรง
 - ห้ามให้ข้อมูลที่ไม่แน่ใจ`;
 
+  const safeHistory = Array.isArray(history) ? history : [];
+
   const messages = [
-    ...((history || []).slice(-6).map((h: any) => ({ role: h.role, content: h.content }))),
-    { role: 'user' as const, content: message },
+    ...safeHistory.slice(-6).flatMap((h: ChatHistoryItem) => {
+      if (
+        (h.role === 'user' || h.role === 'assistant') &&
+        typeof h.content === 'string'
+      ) {
+        return [{ role: h.role, content: h.content }];
+      }
+
+      return [];
+    }),
+    { role: 'user' as const, content: String(message) },
   ];
+
+  if (!anthropic) {
+    return NextResponse.json({
+      reply: `ระบบผู้ช่วย AI ยังไม่ได้เปิดใช้งาน กรุณาโทรหาโรงแรมที่ ${hotel?.phone || 'หน้า Contact'}`,
+      status: 'prepared',
+    });
+  }
 
   try {
     const response = await anthropic.messages.create({
@@ -40,9 +84,14 @@ ${kb ? `ข้อมูลเพิ่มเติม:\n${kb}` : ''}
       system: systemPrompt,
       messages,
     });
-    const reply = response.content[0].type === 'text' ? response.content[0].text : '';
+
+    const firstContent = response.content[0];
+    const reply = firstContent?.type === 'text' ? firstContent.text : '';
+
     return NextResponse.json({ reply });
-  } catch (err: any) {
-    return NextResponse.json({ reply: `ขออภัย ระบบขัดข้องชั่วคราว กรุณาโทรหาโรงแรมที่ ${hotel?.phone || 'หน้า Contact'}` });
+  } catch {
+    return NextResponse.json({
+      reply: `ขออภัย ระบบขัดข้องชั่วคราว กรุณาโทรหาโรงแรมที่ ${hotel?.phone || 'หน้า Contact'}`,
+    });
   }
 }
